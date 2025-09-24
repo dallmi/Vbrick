@@ -188,15 +188,12 @@ def fetch_all_active_videos(auth_manager, proxies=None, count=100):
 #     logging.info(f"Total active videos fetched: %d", len(videos))
 #     return videos
 
-
 def get_video_summary(video_id, auth_manager, start_date=None, end_date=None, proxies=None):
-    """Fetch summary statistics for a specific video"""
     url = f"{auth_manager.base_url}/api/v2/videos/{video_id}/summary-statistics"
     headers = {
         "Authorization": f"Bearer {auth_manager.get_token()}",
         "Accept": "application/json"
     }
-    
     params = {}
     if start_date:
         params["after"] = start_date
@@ -206,14 +203,11 @@ def get_video_summary(video_id, auth_manager, start_date=None, end_date=None, pr
     data = safe_get(url, headers=headers, params=params, proxies=proxies)
     return data if data else {}
 
-
 def main():
-    """Main execution function"""
     cfg_path = os.getenv("VBRICK_CONFIG_JSON", "secrets.json")
     if not os.path.exists(cfg_path):
         logging.error("Config file not found: %s", cfg_path)
         sys.exit(1)
-    
     with open(cfg_path) as f:
         cfg = json.load(f)
     
@@ -221,7 +215,6 @@ def main():
     api_key = cfg.get("api_key")
     api_secret = cfg.get("api_secret")
     proxy_url = cfg.get("proxies")
-    
     suffix = date.today().isoformat()
     metadata_json = cfg.get("metadata_output", f"video_metadata_{suffix}.json")
     summary_json = cfg.get("analytics_json", f"video_summary_{suffix}.json")
@@ -231,76 +224,112 @@ def main():
         logging.error("base_url, api_key, api_secret required in secrets.json")
         sys.exit(1)
     
-    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+    proxies = proxy_url if proxy_url else None
     auth_mgr = VbrickAuthManager(base_url, api_key, api_secret, proxies)
     
     # Fetch all videos from past 2 years
     end_date = date.today().isoformat()
+
     videos = fetch_all_active_videos(auth_mgr, proxies)
     
-    # Save video metadata to JSON
     with open(metadata_json, "w") as mf:
         json.dump(videos, mf, indent=2)
     logging.info("Wrote metadata JSON to %s", metadata_json)
     
-    # Fetch analytics for each video
-    summary_dict = {}
+    summary_dict = {}       # Fetch analytics for each video
     for v in tqdm(videos, desc="Summarizing Videos", unit="video"):
         vid = v.get("id")
-        when_uploaded = v.get("whenUploaded", "")
-        
+        when_uploaded = v.get("whenUploaded", "")[:10]
         # Get video summary statistics
         stats = get_video_summary(vid, auth_mgr, when_uploaded, end_date, proxies)
-        summary_dict[vid] = {
-            "metadata": v,
-            "dailySummary": stats
-        }
+        summary_dict[vid] = {"metadata": v,"dailySummary": stats}
     
-    # Save summary data to JSON
-    with open(summary_json, "w") as sf:
-        json.dump(summary_dict, sf, indent=2)
+    with open(summary_json, "w") as jf:                     # Save summary data to JSON
+        json.dump(summary_dict, jf, indent=2)
     logging.info("Wrote summary JSON to %s", summary_json)
     
-    # Convert to CSV format
-    csv_rows = []
+    rows = []               # Convert to CSV format
     for vid, block in summary_dict.items():
         meta = block["metadata"]
         summary = block["dailySummary"]
-        
         metadata_fields = {
             "video_id": meta.get("id"),
             "title": meta.get("title"),
-            "description": meta.get("description"),
+            "playbackUrl": meta.get("playbackUrl"),
             "duration": meta.get("duration"),
-            "upload_date": meta.get("whenUploaded"),
-            "status": meta.get("status"),
-            "owner_name": meta.get("ownerName"),
-            "owner_email": meta.get("ownerEmail"),
-            "views_total": meta.get("viewsTotal", 0)
+            "whenUploaded": meta.get("whenUploaded"),
+            "lastViewed": meta.get("lastViewed"),
+            "whenPublished": meta.get("whenPublished"),
+            "commentCount": meta.get("commentCount"),
+            "score": meta.get("score"),
+            "uploadedBy": meta.get("uploadedBy"),
+            "tags": ", ".join(meta.get("tags", [])) if isinstance(meta.get("tags"), list) else meta.get("tags", "")
         }
         
-        # Add summary statistics if available
-        if summary:
-            metadata_fields.update({
-                "unique_viewers": summary.get("uniqueViewers", 0),
-                "total_views": summary.get("totalViews", 0),
-                "minutes_watched": summary.get("minutesWatched", 0),
-                "avg_view_time": summary.get("avgViewTime", 0)
-            })
+        # Grouping functions
+        def group_device_type(device_key):
+            if device_key == 'PC':
+                return 'Desktop'
+            elif device_key == "Mobile Device":
+                return "Mobile"
+            else:
+                return "Other"
         
-        csv_rows.append(metadata_fields)
+        def group_browser_type(browser_key):
+            if browser_key in ['Chrome', "Chrome Mobile"]:
+                return "Chrome"
+            elif browser_key in ['Microsoft Edge', 'Microsoft Edge mobile']:
+                return "Microsoft Edge"
+            else:
+                return "Other"
+        
+        # Apply grouping for device and browser statistics
+        device_grouped = {}
+        browser_grouped = {}
+        
+        for d in summary.get('deviceCounts', []):
+            group = group_device_type(d.get('key'))
+            device_grouped[group] = device_grouped.get(group, 0) + d.get('value', 0)
+        
+        for b in summary.get('browserCounts', []):
+            group = group_browser_type(b.get('key'))
+            browser_grouped[group] = browser_grouped.get(group, 0) + b.get('value', 0)
+        
+        # Process daily view data
+        for day in summary.get('totalViewsByDay', []):
+            row = metadata_fields.copy()
+            row['date'] = day.get('key')
+            row['views'] = day.get('value')
+            row.update(device_grouped)
+            row.update(browser_grouped)
+            rows.append(row)
+        
+        # If no daily data, add at least the metadata
+        if not summary.get('totalViewsByDay'):
+            row = metadata_fields.copy()
+            row.update(device_grouped)
+            row.update(browser_grouped)
+            rows.append(row)
     
     # Write CSV file
-    if csv_rows:
-        fieldnames = csv_rows[0].keys()
-        with open(summary_csv, "w", newline="", encoding="utf-8") as csvf:
-            writer = csv.DictWriter(csvf, fieldnames=fieldnames)
+    if rows:
+        # Update the header to include all fields
+        all_keys = set(k for r in rows for k in r.keys())
+        header = ['video_id', 'title', 'date', 'views']
+        extra_cols = sorted(k for k in all_keys if k not in header)
+        final_header = header + extra_cols
+        
+        with open(summary_csv, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=final_header)
             writer.writeheader()
-            writer.writerows(csv_rows)
-        logging.info("Wrote CSV to %s with %d rows", summary_csv, len(csv_rows))
+            writer.writerows(rows)
+        
+        logging.info("Wrote CSV to %s with %d rows", summary_csv, len(rows))
+    else:
+        logging.warning("No data to write to CSV")
     
-    logging.info("Vbrick analytics fetch completed successfully")
+    logging.info("Vbrick analytics processing completed successfully")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
