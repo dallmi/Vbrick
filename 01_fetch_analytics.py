@@ -304,12 +304,16 @@ def main():
             row.update(browser_grouped)
             rows.append(row)
     
-    # Write CSV file
+
+
+
+    # Update header to include all possible keys
     all_keys = set(k for r in rows for k in r.keys())
     header = ['video_id', 'title', 'playbackUrl', 'duration', 'whenUploaded', 'lastViewed', 'whenPublished', 'commentCount', 'score', 'uploadedBy', 'tags', 'date', 'views']
     extra_cols = sorted(k for k in all_keys if k not in header)
     full_header = header + extra_cols
     
+
     # Write to CSV
     with open(summary_csv, 'w', newline='', encoding='utf-8') as cf:
         writer = csv.DictWriter(cf, fieldnames=full_header)
@@ -330,7 +334,6 @@ def main():
         logging.warning("The source file was not found: %s", source_path)
     except Exception as e:
         logging.error("An error occurred while moving file: %s", e)
-
 
 if __name__ == "__main__":
     main()

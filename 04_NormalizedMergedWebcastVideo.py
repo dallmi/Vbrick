@@ -65,6 +65,7 @@ Output: A flattened CSV file where each row represents a single dimension-metric
 
 
 
+
 import pandas as pd
 
 # Load the merged webcast dataset
@@ -72,38 +73,39 @@ df = pd.read_csv("Q:/Vbrick/merged_webcast_video_summary.csv")
 
 # Define metadata columns to retain
 metadata_cols = [
-    "id", "title", "description", "date", "duration_minutes", "speaker", "category"
+    "id", "title", "vodID", "eventURL", "startDate", "endDate",
+    "total_viewingTime", "category", "subcategory", "v_duration", "v_lastViewed", "v_whenPublished"
 ]
 
 # Define dimension configurations
 dimension_configs = [
     {
         "dimension_column": "zone",
-        "columns": ["zone_APAC", "zone_America", "zone_Swiss"],
-        "labels": ["APAC", "America", "Swiss"],
+        "columns": ["zone_APAC", "zone_America", "zone_EMEA", "zone_Other", "zone_Swiss"],
+        "labels": ["APAC", "America", "EMEA", "Other", "Swiss"],
         "metric_column": "attendeeTotal"
     },
     {
         "dimension_column": "webcast_browser", 
-        "columns": ["wc_browser_Chrome", "wc_browser_Edge", "wc_browser_Other"],
+        "columns": ["browser_Chrome", "browser_Edge", "browser_Other"],
         "labels": ["Chrome", "Edge", "Other"],
         "metric_column": "attendeeTotal"
     },
     {
         "dimension_column": "webcast_device",
-        "columns": ["wc_device_Desktop", "wc_device_Mobile", "wc_device_Other"],
-        "labels": ["Desktop", "Mobile", "Other"],
+        "columns": ["deviceType_Mobile", "deviceType_Other", "deviceType_PC"],
+        "labels": ["Mobile", "Other", "PC"],
         "metric_column": "attendeeTotal"
     },
     {
         "dimension_column": "video_browser",
-        "columns": ["v_browser_Chrome", "v_browser_Edge", "v_browser_Other"],
-        "labels": ["Chrome", "Edge", "Other"],
+        "columns": ["v_Chrome", "v_Microsoft Edge", "v_browser Other"],
+        "labels": ["Chrome", "Microsoft Edge", "Other"],
         "metric_column": "v_views"
     },
     {
         "dimension_column": "video_device",
-        "columns": ["v_device_Desktop", "v_device_Mobile", "v_device_Other"],
+        "columns": ["v_Desktop", "v_Mobile", "v_device Other"],
         "labels": ["Desktop", "Mobile", "Other"],
         "metric_column": "v_views"
     }
@@ -112,16 +114,12 @@ dimension_configs = [
 # Collect transformed rows
 records = []
 
-for index, row in df.iterrows():
-    # Create base record with metadata
-    base = row[metadata_cols].to_dict()
-    
+for _, row in df.iterrows():
+    base = row[metadata_cols].to_dict()         # Create base record with metadata
     for config in dimension_configs:
         for col, label in zip(config["columns"], config["labels"]):
-            # Check if this dimension has non-zero values
-            if pd.notna(row[col]) and row[col] > 0:
+            if row[col] != 0:
                 record = base.copy()
-                
                 # Initialize all dimension columns to None
                 record.update({
                     "zone": None,
@@ -132,20 +130,14 @@ for index, row in df.iterrows():
                     "attendeeTotal": None,
                     "v_views": None
                 })
-                
                 # Set the current dimension value
                 record[config["dimension_column"]] = label
+                # Set the appropriate metric value
                 record[config["metric_column"]] = row[col]
-                
                 records.append(record)
 
 # Create normalized DataFrame
 normalized_df = pd.DataFrame(records)
-
-# Export to CSV
-normalized_df.to_csv("Q:/Vbrick/normalized_webcast_video_summary.csv", index=False)
+normalized_df.to_csv("Q:/Vbrick/normalized_webcast_video_summary.csv", index=False) # Export to CSV
 
 print(f"Normalized data exported with {len(normalized_df)} records")
-print(f"Original dataset had {len(df)} webcasts")
-print("\nSample of normalized data:")
-print(normalized_df.head(10))
