@@ -1,16 +1,3 @@
-#!/usr/bin/env python3
-"""
-Vbrick Analytics Fetcher
-
-This script authenticates with the Vbrick API, retrieves video metadata and daily view statistics 
-for all active videos uploaded in the past two years, and exports the results to JSON and CSV files.
-It includes robust error handling, token management, and supports proxy configuration.
-The final CSV is moved to a designated network location for further use.
-
-Author: Analytics Team
-Date: 2024
-"""
-
 import os
 import sys
 import json
@@ -23,9 +10,15 @@ from datetime import datetime, date, timedelta, timezone
 from tqdm import tqdm
 import csv
 
+"""
+This script authenticates with the Vbrick API, retrieves video metadata and daily view statistics 
+for all active videos uploaded in the past two years, and exports the results to JSON and CSV files.
+It includes robust error handling, token management, and supports proxy configuration.
+The final CSV is moved to a designated network location for further use.
+"""
+
 # Enable debug logging
 logging.basicConfig(
-    level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
@@ -51,14 +44,13 @@ def safe_get(url, headers=None, params=None, proxies=None, retries=3, delay=2):
         except Exception as e:
             logging.error(f"Unexpected error on GET {url}: {e}")
             break
+        
+        time.sleep(delay)
     
     logging.error(f"Failed GET {url} after {retries} retries")
     return None
 
-
 class VbrickAuthManager:
-    """Handles Vbrick API authentication and token management"""
-    
     def __init__(self, base_url, api_key, api_secret, proxies=None):
         self.base_url = base_url.rstrip('/')
         self.api_key = api_key
@@ -69,14 +61,12 @@ class VbrickAuthManager:
         self.expires_in = 3600
     
     def get_token(self):
-        """Get current valid token, refreshing if necessary"""
         now = time.time()
         if not self.token or (now - self.token_created) > (self.expires_in - 60):
             self.refresh_token()
         return self.token
     
     def refresh_token(self):
-        """Refresh the access token"""
         url = f"{self.base_url}/api/v2/authenticate"
         logging.info(f"Requesting new access token via {url}")
         
@@ -360,4 +350,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-"content-type"; "application/json"
