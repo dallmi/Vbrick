@@ -71,217 +71,161 @@ class VbrickAuthManager:
         }
         
         try:
-            response = requests.post(
+            resp = requests.post(
                 url, 
                 headers=headers, 
                 json=payload, 
                 proxies=self.proxies, 
-                timeout=20
+                timeout=30
             )
-            response.raise_for_status()
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.HTTPError as e:
+            logging.error("Authentication failed %s: %s", e.response.status_code, e.response.text)
+            sys.exit(1)
+        except Exception as ex:
+            logging.error("Unexpected error fetching token: %s", ex)
+            sys.exit(1)
+        
+        token = data.get("token")
+        if not token:
+            logging.error("No 'token' field in response: %s", data)
+            sys.exit(1)
             
-            token_data = response.json()
-            self.token = token_data.get('accessToken')
-            self.expires_in = token_data.get('expiresIn', 3600)
-            self.token_created = time.time()
-            
-            logging.info(f"Token refreshed successfully, expires in {self.expires_in} seconds")
-            
-        except Exception as e:
-            logging.error(f"Failed to refresh token: {e}")
-            raise
-    
-    def get_auth_headers(self):
-        """Get headers with current authorization token"""
-        return {
-            "Authorization": f"Bearer {self.get_token()}",
-            "accept": "application/json",
-            "content-type": "application/json"
-        }
+        self.token = token
+        self.expires_in = data.get("expiresIn", self.expires_in)
+        self.token_created = time.time()
+        logging.info("obtained token; expires in %d seconds", self.expires_in)
 
 
-class VbrickAnalyticsFetcher:
-    """Main class for fetching Vbrick analytics data"""
+def fetch_all_active_videos(auth_manager, proxies=None, count=100):
+    videos = []
+    scroll_id = None
     
-    def __init__(self, base_url, api_key, api_secret, proxies=None):
-        self.auth_manager = VbrickAuthManager(base_url, api_key, api_secret, proxies)
-        self.base_url = base_url.rstrip('/')
-        self.proxies = proxies
-        self.videos_data = []
-        self.analytics_data = []
+    # Calculate the date 730 days ago in UTC ISO 8601 format
+    two_year_ago = (datetime.now(timezone.utc) - timedelta(days=730)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    logging.debug(f"Fetching videos from date: {two_year_ago}")
     
-    def fetch_videos(self, days_back=730):
-        """Fetch all videos uploaded in the past specified days"""
-        logging.info(f"Fetching videos from the past {days_back} days")
-        
-        # Calculate date range
-        end_date = datetime.now(timezone.utc)
-        start_date = end_date - timedelta(days=days_back)
-        
-        url = f"{self.base_url}/api/v2/videos"
-        headers = self.auth_manager.get_auth_headers()
-        
+    # First request to get total count
+    url = f"{auth_manager.base_url}/api/v2/videos/search"
+    headers = {"Authorization": f"Bearer {auth_manager.get_token()}"}
+    
+    params = {
+        "count": count,
+        "status": "Active",
+        "fromUploadDate": two_year_ago
+    }
+    
+    data = safe_get(url, headers=headers, params=params, proxies=proxies)
+    if not data:
+        logging.error("Initial request failed, cannot fetch videos.")
+        return []
+    
+    total = data.get("totalVideos", 0)
+    pbar = tqdm(total=total, desc="Fetching Active Videos", unit="video", dynamic_ncols=True)
+    
+    items = data.get("videos", [])
+    videos.extend(items)
+    pbar.update(len(items))
+    scroll_id = data.get("scrollId")
+    
+    # Continue fetching with pagination using scroll_id
+    while scroll_id:
         params = {
-            "uploadedAfter": start_date.isoformat(),
-            "uploadedBefore": end_date.isoformat(),
-            "status": "active",
-            "limit": 100,  # Max per page
-            "offset": 0
+            "count": count,
+            "scrollId": scroll_id
         }
         
-        all_videos = []
+        data = safe_get(url, headers=headers, params=params, proxies=proxies)
+        if not data:
+            logging.warning("Failed to fetch more videos, stopping pagination")
+            break
         
-        while True:
-            logging.info(f"Fetching videos, offset: {params['offset']}")
+        items = data.get("videos", [])
+        if not items:
+            break
             
-            response_data = safe_get(
-                url, 
-                headers=headers, 
-                params=params, 
-                proxies=self.proxies
-            )
-            
-            if not response_data:
-                break
-            
-            videos = response_data.get('videos', [])
-            if not videos:
-                break
-            
-            all_videos.extend(videos)
-            logging.info(f"Retrieved {len(videos)} videos, total: {len(all_videos)}")
-            
-            # Check if we have more pages
-            if len(videos) < params['limit']:
-                break
-            
-            params['offset'] += params['limit']
-            time.sleep(0.5)  # Rate limiting
+        videos.extend(items)
+        pbar.update(len(items))
+        scroll_id = data.get("scrollId")
         
-        self.videos_data = all_videos
-        logging.info(f"Total videos retrieved: {len(all_videos)}")
-        return all_videos
+        # Small delay to be respectful to the API
+        time.sleep(0.1)
     
-    def fetch_video_analytics(self, video_id, days_back=30):
-        """Fetch analytics for a specific video"""
-        url = f"{self.base_url}/api/v2/videos/{video_id}/analytics"
-        headers = self.auth_manager.get_auth_headers()
-        
-        # Calculate date range for analytics
-        end_date = datetime.now(timezone.utc)
-        start_date = end_date - timedelta(days=days_back)
-        
-        params = {
-            "startDate": start_date.isoformat(),
-            "endDate": end_date.isoformat(),
-            "granularity": "daily"
+    pbar.close()
+    logging.info(f"Fetched {len(videos)} videos total")
+    return videos
+
+
+def fetch_video_analytics(auth_manager, video_id, proxies=None, days_back=30):
+    """Fetch analytics for a specific video"""
+    # Calculate date range for analytics
+    end_date = datetime.now(timezone.utc)
+    start_date = end_date - timedelta(days=days_back)
+    
+    url = f"{auth_manager.base_url}/api/v2/videos/{video_id}/analytics"
+    headers = {"Authorization": f"Bearer {auth_manager.get_token()}"}
+    
+    params = {
+        "startDate": start_date.isoformat(),
+        "endDate": end_date.isoformat(),
+        "granularity": "daily"
+    }
+    
+    analytics_data = safe_get(url, headers=headers, params=params, proxies=proxies)
+    return analytics_data
+
+
+def export_to_json(data, filename="vbrick_analytics.json"):
+    """Export data to JSON file"""
+    export_data = {
+        'export_timestamp': datetime.now().isoformat(),
+        'total_videos': len(data.get('videos', [])),
+        'data': data
+    }
+    
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(export_data, f, indent=2, ensure_ascii=False)
+    
+    logging.info(f"Data exported to {filename}")
+    return filename
+
+
+def export_to_csv(data, filename="vbrick_analytics.csv"):
+    """Export flattened data to CSV file"""
+    videos = data.get('videos', [])
+    if not videos:
+        logging.warning("No video data to export")
+        return None
+    
+    csv_rows = []
+    for video in videos:
+        # Extract video metadata
+        base_row = {
+            'video_id': video.get('id'),
+            'title': video.get('title'),
+            'description': video.get('description'),
+            'duration': video.get('duration'),
+            'upload_date': video.get('uploadDate'),
+            'status': video.get('status'),
+            'owner_name': video.get('ownerName'),
+            'owner_email': video.get('ownerEmail'),
+            'views_total': video.get('viewsTotal', 0)
         }
-        
-        analytics_data = safe_get(
-            url, 
-            headers=headers, 
-            params=params, 
-            proxies=self.proxies
-        )
-        
-        return analytics_data
+        csv_rows.append(base_row)
     
-    def fetch_all_analytics(self, days_back=30):
-        """Fetch analytics for all videos"""
-        logging.info(f"Fetching analytics for {len(self.videos_data)} videos")
+    # Write to CSV
+    if csv_rows:
+        fieldnames = csv_rows[0].keys()
+        with open(filename, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(csv_rows)
         
-        analytics_results = []
-        
-        for video in tqdm(self.videos_data, desc="Fetching analytics"):
-            video_id = video.get('id')
-            if not video_id:
-                continue
-            
-            analytics = self.fetch_video_analytics(video_id, days_back)
-            if analytics:
-                # Combine video metadata with analytics
-                combined_data = {
-                    'video_metadata': video,
-                    'analytics': analytics
-                }
-                analytics_results.append(combined_data)
-            
-            time.sleep(0.1)  # Rate limiting
-        
-        self.analytics_data = analytics_results
-        logging.info(f"Analytics retrieved for {len(analytics_results)} videos")
-        return analytics_results
-    
-    def export_to_json(self, filename="vbrick_analytics.json"):
-        """Export all data to JSON file"""
-        export_data = {
-            'export_timestamp': datetime.now().isoformat(),
-            'total_videos': len(self.videos_data),
-            'videos_with_analytics': len(self.analytics_data),
-            'data': self.analytics_data
-        }
-        
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(export_data, f, indent=2, ensure_ascii=False)
-        
-        logging.info(f"Data exported to {filename}")
+        logging.info(f"CSV exported to {filename} with {len(csv_rows)} rows")
         return filename
     
-    def export_to_csv(self, filename="vbrick_analytics.csv"):
-        """Export flattened data to CSV file"""
-        if not self.analytics_data:
-            logging.warning("No analytics data to export")
-            return None
-        
-        csv_rows = []
-        
-        for item in self.analytics_data:
-            video = item.get('video_metadata', {})
-            analytics = item.get('analytics', {})
-            
-            # Extract video metadata
-            base_row = {
-                'video_id': video.get('id'),
-                'title': video.get('title'),
-                'description': video.get('description'),
-                'duration': video.get('duration'),
-                'upload_date': video.get('uploadDate'),
-                'status': video.get('status'),
-                'owner_name': video.get('ownerName'),
-                'owner_email': video.get('ownerEmail'),
-                'views_total': video.get('viewsTotal', 0),
-                'likes': video.get('likes', 0),
-                'dislikes': video.get('dislikes', 0)
-            }
-            
-            # Extract daily analytics if available
-            daily_stats = analytics.get('dailyStats', [])
-            if daily_stats:
-                for day_stat in daily_stats:
-                    row = base_row.copy()
-                    row.update({
-                        'date': day_stat.get('date'),
-                        'daily_views': day_stat.get('views', 0),
-                        'daily_unique_viewers': day_stat.get('uniqueViewers', 0),
-                        'daily_minutes_watched': day_stat.get('minutesWatched', 0)
-                    })
-                    csv_rows.append(row)
-            else:
-                # No daily stats, just add the base video info
-                csv_rows.append(base_row)
-        
-        # Write to CSV
-        if csv_rows:
-            fieldnames = csv_rows[0].keys()
-            with open(filename, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(csv_rows)
-            
-            logging.info(f"CSV exported to {filename} with {len(csv_rows)} rows")
-            return filename
-        
-        return None
+    return None
 
 
 def main():
@@ -301,25 +245,25 @@ def main():
     NETWORK_PATH = "\\\\network\\share\\vbrick_reports\\"
     
     try:
-        # Initialize fetcher
-        fetcher = VbrickAnalyticsFetcher(BASE_URL, API_KEY, API_SECRET, PROXIES)
+        # Initialize auth manager
+        auth_manager = VbrickAuthManager(BASE_URL, API_KEY, API_SECRET, PROXIES)
         
         # Fetch videos from past 2 years
         logging.info("Starting Vbrick analytics fetch process")
-        videos = fetcher.fetch_videos(days_back=730)
+        videos = fetch_all_active_videos(auth_manager, PROXIES)
         
         if not videos:
             logging.error("No videos found")
             return 1
         
-        # Fetch analytics for past 30 days
-        analytics = fetcher.fetch_all_analytics(days_back=30)
+        # Prepare data structure
+        data = {'videos': videos}
         
         # Export to JSON
-        json_file = fetcher.export_to_json("vbrick_analytics.json")
+        json_file = export_to_json(data, "vbrick_analytics.json")
         
         # Export to CSV
-        csv_file = fetcher.export_to_csv("vbrick_analytics.csv")
+        csv_file = export_to_csv(data, "vbrick_analytics.csv")
         
         # Move CSV to network location if specified and file exists
         if csv_file and NETWORK_PATH and os.path.exists(NETWORK_PATH):
