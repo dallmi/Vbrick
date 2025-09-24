@@ -248,7 +248,8 @@ def main():
         json.dump(summary_dict, jf, indent=2)
     logging.info("Wrote summary JSON to %s", summary_json)
     
-    rows = []               # Convert to CSV format
+    # Convert to CSV format
+    rows = []
     for vid, block in summary_dict.items():
         meta = block["metadata"]
         summary = block["dailySummary"]
@@ -273,7 +274,7 @@ def main():
             elif device_key == "Mobile Device":
                 return "Mobile"
             else:
-                return "Other"
+                return "Other Device"
         
         def group_browser_type(browser_key):
             if browser_key in ['Chrome', "Chrome Mobile"]:
@@ -281,16 +282,15 @@ def main():
             elif browser_key in ['Microsoft Edge', 'Microsoft Edge mobile']:
                 return "Microsoft Edge"
             else:
-                return "Other"
+                return "Other Browser"
         
         # Apply grouping for device and browser statistics
         device_grouped = {}
-        browser_grouped = {}
-        
         for d in summary.get('deviceCounts', []):
             group = group_device_type(d.get('key'))
             device_grouped[group] = device_grouped.get(group, 0) + d.get('value', 0)
         
+        browser_grouped = {}
         for b in summary.get('browserCounts', []):
             group = group_browser_type(b.get('key'))
             browser_grouped[group] = browser_grouped.get(group, 0) + b.get('value', 0)
@@ -303,32 +303,33 @@ def main():
             row.update(device_grouped)
             row.update(browser_grouped)
             rows.append(row)
-        
-        # If no daily data, add at least the metadata
-        if not summary.get('totalViewsByDay'):
-            row = metadata_fields.copy()
-            row.update(device_grouped)
-            row.update(browser_grouped)
-            rows.append(row)
     
     # Write CSV file
-    if rows:
-        # Update the header to include all fields
-        all_keys = set(k for r in rows for k in r.keys())
-        header = ['video_id', 'title', 'date', 'views']
-        extra_cols = sorted(k for k in all_keys if k not in header)
-        final_header = header + extra_cols
-        
-        with open(summary_csv, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=final_header)
-            writer.writeheader()
-            writer.writerows(rows)
-        
-        logging.info("Wrote CSV to %s with %d rows", summary_csv, len(rows))
-    else:
-        logging.warning("No data to write to CSV")
+    all_keys = set(k for r in rows for k in r.keys())
+    header = ['video_id', 'title', 'playbackUrl', 'duration', 'whenUploaded', 'lastViewed', 'whenPublished', 'commentCount', 'score', 'uploadedBy', 'tags', 'date', 'views']
+    extra_cols = sorted(k for k in all_keys if k not in header)
+    full_header = header + extra_cols
     
-    logging.info("Vbrick analytics processing completed successfully")
+    # Write to CSV
+    with open(summary_csv, 'w', newline='', encoding='utf-8') as cf:
+        writer = csv.DictWriter(cf, fieldnames=full_header)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+    logging.info("Wrote summary CSV to %s", summary_csv)
+    
+    # Define source and destination paths
+    source_path = f"P:/IMPORTANT/Projects/Vbrick/UBS_TV_{suffix}.csv"
+    destination_path = f"Q:/Vbrick/UBS_TV.csv"
+    
+    # Move the file
+    try:
+        shutil.move(source_path, destination_path)
+        logging.info("File moved successfully from %s to %s", source_path, destination_path)
+    except FileNotFoundError:
+        logging.warning("The source file was not found: %s", source_path)
+    except Exception as e:
+        logging.error("An error occurred while moving file: %s", e)
 
 
 if __name__ == "__main__":
