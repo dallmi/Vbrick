@@ -22,15 +22,12 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-
 def safe_get(url, headers=None, params=None, proxies=None, retries=3, delay=2):
     """Safe HTTP GET with retry logic and error handling"""
     for attempt in range(1, retries + 1):
         try:
             logging.debug(f"GET {url} with headers={headers} and params={params}")
-            resp = requests.get(
-                url, headers=headers, params=params, proxies=proxies, timeout=20
-            )
+            resp = requests.get(url, headers=headers, params=params, proxies=proxies, timeout=20)
             resp.raise_for_status()
             return resp.json()
         except (ProxyError, ConnectionError) as e:
@@ -39,15 +36,8 @@ def safe_get(url, headers=None, params=None, proxies=None, retries=3, delay=2):
             logging.error(f"HTTP {e.response.status_code} on GET {url}: {e.response.text}")
             if e.response.status_code == 429:
                 delay *= 2
-                time.sleep(delay)
-                continue
-        except Exception as e:
-            logging.error(f"Unexpected error on GET {url}: {e}")
-            break
-        
         time.sleep(delay)
-    
-    logging.error(f"Failed GET {url} after {retries} retries")
+    logging.error(f"Unexpected error on GET {url}: {e}")
     return None
 
 class VbrickAuthManager:
