@@ -64,7 +64,6 @@ class VbrickAuthManager:
             "accept": "application/json",
             "content-type": "application/json"
         }
-        
         payload = {
             "apiKey": self.api_key,
             "apiSecret": self.api_secret
@@ -97,7 +96,6 @@ class VbrickAuthManager:
         self.token_created = time.time()
         logging.info("obtained token; expires in %d seconds", self.expires_in)
 
-
 def fetch_all_active_videos(auth_manager, proxies=None, count=100):
     videos = []
     scroll_id = None
@@ -109,7 +107,6 @@ def fetch_all_active_videos(auth_manager, proxies=None, count=100):
     # First request to get total count
     url = f"{auth_manager.base_url}/api/v2/videos/search"
     headers = {"Authorization": f"Bearer {auth_manager.get_token()}"}
-    
     params = {
         "count": count,
         "status": "Active",
